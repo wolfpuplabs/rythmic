@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sekiro Web 3D: Shadows Die Browser</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #111; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; }
+        #menu { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 10; }
+        h1 { color: #fbc02d; text-shadow: 0 0 10px rgba(251, 192, 45, 0.5); font-size: 3rem; margin-bottom: 10px; }
+        button { padding: 15px 30px; margin: 10px; font-size: 1.2rem; cursor: pointer; background: #8b0000; color: white; border: 2px solid #ff4a4a; border-radius: 5px; font-weight: bold; transition: 0.2s; }
+        button:hover { background: #ff0000; transform: scale(1.05); }
+        #share-link { margin-top: 20px; font-size: 1.2rem; color: #4caf50; user-select: all; text-align: center; background: #222; padding: 10px; border-radius: 5px; display: none; }
+        
+        #hud { display: none; width: 100%; padding: 20px; box-sizing: border-box; justify-content: space-between; position: absolute; top: 0; z-index: 5; pointer-events: none; }
+        .player-stats { width: 35%; max-width: 400px; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px; }
+        .name { font-weight: bold; margin-bottom: 5px; font-size: 1.2rem; }
+        .hp-bg { background: #333; height: 15px; width: 100%; border: 2px solid #555; position: relative; }
+        .hp-bar { background: #d32f2f; height: 100%; width: 100%; transition: width 0.1s; }
+        .posture-bg { background: transparent; height: 10px; width: 100%; margin-top: 5px; display: flex; justify-content: center; border-bottom: 2px solid #444; }
+        .posture-bar { background: #fbc02d; height: 100%; width: 0%; box-shadow: 0 0 10px orange; transition: width 0.1s; }
+        
+        #kanji { position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%); font-size: 100px; color: #ff3333; text-shadow: 0 0 20px #ff0000; font-weight: bold; display: none; z-index: 2; pointer-events: none; }
+        #death-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; justify-content: center; align-items: center; background: rgba(0,0,0,0.7); z-index: 20; color: #ff3333; font-size: 5rem; font-weight: bold; letter-spacing: 5px; text-shadow: 0 0 20px black; }
+        
+        #controls-info { position: absolute; bottom: 20px; left: 20px; font-size: 0.9rem; color: #ccc; background: rgba(0,0,0,0.6); padding: 10px; border-radius: 5px; z-index: 5; pointer-events: none; }
+    </style>
+    <!-- Three.js & GLTFLoader -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <!-- PeerJS untuk Multiplayer P2P -->
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+</head>
+<body>
+
+    <div id="menu">
+        <h1>SEKIRO: WEB EDITION</h1>
+        <p style="color: #aaa; margin-bottom: 30px;">3D Multiplayer Prototype</p>
+        <button id="btn-bot">Play vs AI Bot</button>
+        <button id="btn-host">Host Online Game</button>
+        <div id="share-link"></div>
+    </div>
+
+    <div id="hud">
+        <div class="player-stats">
+            <div class="name">Player 1 (Wolf)</div>
+            <div class="hp-bg"><div class="hp-bar" id="p1-hp"></div></div>
+            <div class="posture-bg"><div class="posture-bar" id="p1-posture"></div></div>
+        </div>
+        <div class="player-stats" style="text-align: right;">
+            <div class="name" id="p2-name">Player 2 (Owl)</div>
+            <div class="hp-bg" style="display: flex; justify-content: flex-end;"><div class="hp-bar" id="p2-hp"></div></div>
+            <div class="posture-bg"><div class="posture-bar" id="p2-posture"></div></div>
+        </div>
+    </div>
+
+    <div id="kanji">危</div>
+    <div id="death-screen">SHINOBI EXECUTION</div>
+    
+    <div id="controls-info">
+        <strong>Gerak:</strong> W/A/S/D | <strong>Block/Deflect:</strong> Tahan Shift<br>
+        <strong>Attack:</strong> F (Normal) | G (Thrust) | H (Sweep)<br>
+        <strong>Dodge/Mikiri:</strong> Space
+    </div>
+
+<script>
+// --- 1. SETUP THREE.JS ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+scene.fog = new THREE.FogExp2(0x1a1a2e, 0.05);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// Pencahayaan
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xffeedd, 0.8);
+dirLight.position.set(5, 10, -5);
+dirLight.castShadow = true;
+scene.add(dirLight);
+
+// Lantai Dojo
+const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(100, 100),
+    new THREE.MeshStandardMaterial({ color: 0x222233, roughness: 0.8 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Grid pembantu visual
+const gridHelper = new THREE.GridHelper(100, 50, 0x444444, 0x222222);
+scene.add(gridHelper);
+
+// Partikel Sparks (Deflect)
+const sparks = [];
+function createSparks(x, y, z, colorHex) {
+    const geo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+    const mat = new THREE.MeshBasicMaterial({ color: colorHex });
+    for(let i=0; i<15; i++) {
+        const spark = new THREE.Mesh(geo, mat);
+        spark.position.set(x, y, z);
+        spark.velocity = new THREE.Vector3((Math.random()-0.5)*10, Math.random()*5, (Math.random()-0.5)*10);
+        spark.life = 20;
+        scene.add(spark);
+        sparks.push(spark);
+    }
+}
+
+// --- 2. KELAS KARAKTER ---
+class Fighter {
+    constructor(color, startX, isLocal) {
+        this.isLocal = isLocal;
+        this.hp = 100;
+        this.posture = 0;
+        this.isStunned = false;
+        this.stunTimer = 0;
+        
+        // --- BLOK SETUP GLTFLOADER (Untuk Model 3D Sketchfab/Mixamo Nanti) ---
+        /*
+        this.mesh = new THREE.Group();
+        scene.add(this.mesh);
+        this.mesh.position.set(startX, 0, 0);
+        
+        const loader = new THREE.GLTFLoader();
+        loader.load('./models/samurai.glb', (gltf) => {
+            const model = gltf.scene;
+            model.scale.set(1, 1, 1); // Sesuaikan ukuran
+            model.traverse(child => { if (child.isMesh) child.castShadow = true; });
+            this.mesh.add(model);
+            
+            // Setup Animasi Mixamo
+            this.mixer = new THREE.AnimationMixer(model);
+            this.animIdle = this.mixer.clipAction(gltf.animations.find(a => a.name === 'Idle'));
+            this.animAttack = this.mixer.clipAction(gltf.animations.find(a => a.name === 'Attack'));
+            this.animBlock = this.mixer.clipAction(gltf.animations.find(a => a.name === 'Block'));
+            this.animIdle.play();
+        });
+        */
+        
+        // --- SETUP MVP SEMENTARA (Kapsul & Balok) ---
+        this.mesh = new THREE.Group();
+        this.mesh.position.set(startX, 0, 0);
+        scene.add(this.mesh);
+
+        const bodyGeo = new THREE.CylinderGeometry(0.5, 0.5, 2, 16);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: color });
+        this.body = new THREE.Mesh(bodyGeo, bodyMat);
+        this.body.position.y = 1;
+        this.body.castShadow = true;
+        this.mesh.add(this.body);
+
+        const swordGeo = new THREE.BoxGeometry(0.1, 1.8, 0.2);
+        const swordMat = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+        this.swordWrapper = new THREE.Group(); // Pivot point untuk pedang
+        this.swordWrapper.position.set(0.6, 1, 0.5);
+        this.sword = new THREE.Mesh(swordGeo, swordMat);
+        this.sword.position.y = 0.9; // Ujung pedang di atas
+        this.sword.castShadow = true;
+        this.swordWrapper.add(this.sword);
+        this.mesh.add(this.swordWrapper);
+        // ---------------------------------------------
+
+        // States
+        this.isBlocking = false;
+        this.blockTimer = 0; // Waktu untuk Deflect window
+        this.isAttacking = false;
+        this.attackType = 'normal';
+        this.isDodging = false;
+        this.dodgeTimer = 0;
+        this.attackProgress = 0;
+    }
+
+    update(delta, enemy) {
+        if (this.hp <= 0) return;
+
+        // Mixer Animasi Mixamo (Buka komentar jika pakai model)
+        // if (this.mixer) this.mixer.update(delta);
+
+        // Putar badan ke arah musuh (Lock-on)
+        if (!this.isDodging && !this.isStunned) {
+            const targetPos = new THREE.Vector3(enemy.mesh.position.x, this.mesh.position.y, enemy.mesh.position.z);
+            this.mesh.lookAt(targetPos);
+        }
+
+        // Posture Recovery
+        if (!this.isBlocking && !this.isAttacking && this.posture > 0 && !this.isStunned) {
+            this.posture -= 10 * delta;
+            if(this.posture < 0) this.posture = 0;
+        }
+
+        if (this.isStunned) {
+            this.stunTimer -= delta;
+            this.body.material.color.setHex(0xff0000); // Visual indikator stun
+            if (this.stunTimer <= 0) {
+                this.isStunned = false;
+                this.posture = 0;
+                this.body.material.color.setHex(this.isLocal ? 0x00aaff : 0xff3300);
+            }
+            return; // Tidak bisa gerak saat stun
+        }
+
+        // Animasi serangan manual MVP
+        if (this.isAttacking) {
+            this.attackProgress += delta * 3; // Kecepatan serangan
+            
+            // Animasi pedang dasar
+            if(this.attackType === 'normal') this.swordWrapper.rotation.x = -Math.sin(this.attackProgress * Math.PI) * 2;
+            if(this.attackType === 'thrust') this.swordWrapper.position.z = 0.5 + Math.sin(this.attackProgress * Math.PI) * 1.5;
+            if(this.attackType === 'sweep') this.swordWrapper.rotation.y = -Math.sin(this.attackProgress * Math.PI) * 2;
+
+            if (this.attackProgress >= 0.5 && this.attackProgress < 0.6) { // Active Hitbox frame
+                this.checkHit(enemy);
+            }
+
+            if (this.attackProgress >= 1.0) {
+                this.isAttacking = false;
+                this.attackProgress = 0;
+                this.swordWrapper.rotation.set(0,0,0);
+                this.swordWrapper.position.set(0.6, 1, 0.5);
+                document.getElementById('kanji').style.display = 'none';
+            }
+        }
+
+        // Visual Block MVP
+        if (this.isBlocking && !this.isAttacking) {
+            this.swordWrapper.rotation.x = -Math.PI / 2;
+            this.swordWrapper.position.set(0, 1.5, 0.8);
+            this.blockTimer += delta;
+        } else if (!this.isAttacking) {
+            this.swordWrapper.rotation.set(0,0,0);
+            this.swordWrapper.position.set(0.6, 1, 0.5);
+            this.blockTimer = 0;
+        }
+
+        // Dodge timing
+        if(this.isDodging) {
+            this.dodgeTimer -= delta;
+            this.mesh.translateZ(15 * delta); // Dash maju
+            if(this.dodgeTimer <= 0) this.isDodging = false;
+        }
+    }
+
+    attack(type) {
+        if (this.isAttacking || this.isDodging || this.isStunned) return;
+        this.isAttacking = true;
+        this.attackType = type;
+        this.attackProgress = 0;
+
+        // Buka komentar ini jika pakai mixamo
+        // this.animAttack.reset().play();
+
+        if (type === 'thrust' || type === 'sweep') {
+            document.getElementById('kanji').style.display = 'block';
+            // Suara Perilous Attack bisa ditambahkan di sini
+        }
+    }
+
+    checkHit(enemy) {
+        const dist = this.mesh.position.distanceTo(enemy.mesh.position);
+        if (dist > 3) return; // Out of range
+
+        const hitX = (this.mesh.position.x + enemy.mesh.position.x) / 2;
+        const hitZ = (this.mesh.position.z + enemy.mesh.position.z) / 2;
+
+        if (enemy.isStunned) {
+            // DEATHBLOW
+            enemy.hp = 0;
+            createSparks(enemy.mesh.position.x, 1.5, enemy.mesh.position.z, 0xff0000);
+            return;
+        }
+
+        if (this.attackType === 'normal') {
+            if (enemy.isBlocking) {
+                if (enemy.blockTimer < 0.2) { 
+                    // DEFLECT! (Perfect Parry)
+                    createSparks(hitX, 1.5, hitZ, 0xffffff);
+                    this.addPosture(20); // Penyerang kena damage postur
+                    enemy.addPosture(5);
+                } else {
+                    // Normal Block
+                    createSparks(hitX, 1.5, hitZ, 0xffaa00);
+                    enemy.addPosture(15);
+                }
+            } else if (!enemy.isDodging) {
+                enemy.hp -= 10;
+                createSparks(hitX, 1.5, hitZ, 0xff0000);
+            }
+        } 
+        else if (this.attackType === 'thrust') {
+            if (enemy.isDodging) {
+                // MIKIRI COUNTER
+                createSparks(hitX, 0.5, hitZ, 0xfbc02d);
+                this.addPosture(40); // Penyerang kena stun postur parah
+                enemy.isDodging = false;
+            } else {
+                enemy.hp -= 20;
+                createSparks(hitX, 1.5, hitZ, 0xff0000);
+            }
+        }
+        else if (this.attackType === 'sweep') {
+            // Simplifikasi: Hit asalkan tidak jauh
+            enemy.hp -= 15;
+            createSparks(hitX, 1, hitZ, 0xff0000);
+        }
+    }
+
+    addPosture(amt) {
+        this.posture += amt;
+        if (this.posture >= 100) {
+            this.posture = 100;
+            this.isStunned = true;
+            this.stunTimer = 3.0; // Stun 3 detik
+            this.isBlocking = false;
+            this.isAttacking = false;
+        }
+    }
+}
+
+// --- 3. INPUT & JARINGAN ---
+let p1, p2;
+let gameMode = ''; 
+let peer, conn;
+const keys = {};
+
+window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+function handleLocalInput(delta) {
+    if(!p1 || p1.hp <= 0 || p1.isStunned) return;
+    
+    const speed = 5 * delta;
+    
+    if (!p1.isAttacking && !p1.isBlocking && !p1.isDodging) {
+        if (keys['w']) p1.mesh.translateZ(speed);
+        if (keys['s']) p1.mesh.translateZ(-speed);
+        if (keys['a']) p1.mesh.translateX(-speed);
+        if (keys['d']) p1.mesh.translateX(speed);
+    }
+
+    p1.isBlocking = keys['shift'];
+
+    if (keys[' '] && !p1.isDodging && !p1.isBlocking) {
+        p1.isDodging = true;
+        p1.dodgeTimer = 0.3;
+    }
+
+    if (!p1.isDodging) {
+        if (keys['f']) p1.attack('normal');
+        if (keys['g']) p1.attack('thrust');
+        if (keys['h']) p1.attack('sweep');
+    }
+
+    // Kamera mengikuti dari belakang P1 menatap P2
+    const idealOffset = new THREE.Vector3(0, 3, 5);
+    idealOffset.applyQuaternion(p1.mesh.quaternion);
+    idealOffset.add(p1.mesh.position);
+    
+    camera.position.lerp(idealOffset, 0.1);
+    camera.lookAt(p2.mesh.position.x, 1, p2.mesh.position.z);
+
+    // Kirim data P2P
+    if (gameMode === 'online' && conn && conn.open) {
+        conn.send({
+            x: p1.mesh.position.x, z: p1.mesh.position.z,
+            rotY: p1.mesh.rotation.y,
+            hp: p1.hp, posture: p1.posture,
+            attacking: p1.isAttacking, attackType: p1.attackType,
+            blocking: p1.isBlocking, stunned: p1.isStunned
+        });
+    }
+}
+
+function handleBotAI(delta) {
+    if(!p2 || p2.hp <= 0 || p2.isStunned) return;
+
+    const dist = p2.mesh.position.distanceTo(p1.mesh.position);
+    p2.mesh.lookAt(p1.mesh.position.x, p2.mesh.position.y, p1.mesh.position.z);
+
+    if (dist > 2.5) {
+        p2.mesh.translateZ(3 * delta); 
+        p2.isBlocking = false;
+    } else {
+        if (!p2.isAttacking) {
+            const rand = Math.random();
+            if (p1.isAttacking) {
+                // AI mencoba Deflect/Mikiri
+                if(p1.attackType === 'normal' && rand < 0.6) p2.isBlocking = true;
+                if(p1.attackType === 'thrust' && rand < 0.3) { p2.isDodging = true; p2.dodgeTimer = 0.3; }
+            } else {
+                p2.isBlocking = false;
+                if (rand < 0.02) p2.attack('normal');
+                else if (rand < 0.025) p2.attack('thrust');
+            }
+        }
+    }
+}
+
+// --- 4. GAME LOOP ---
+const clock = new THREE.Clock();
+function animate() {
+    requestAnimationFrame(animate);
+    const delta = clock.getDelta();
+
+    if (p1 && p2) {
+        handleLocalInput(delta);
+        if (gameMode === 'bot') handleBotAI(delta);
+
+        p1.update(delta, p2);
+        p2.update(delta, p1);
+
+        // Update UI
+        document.getElementById('p1-hp').style.width = Math.max(0, p1.hp) + '%';
+        document.getElementById('p1-posture').style.width = Math.min(100, p1.posture) + '%';
+        document.getElementById('p2-hp').style.width = Math.max(0, p2.hp) + '%';
+        document.getElementById('p2-posture').style.width = Math.min(100, p2.posture) + '%';
+
+        // Check Death
+        if (p1.hp <= 0 || p2.hp <= 0) {
+            document.getElementById('death-screen').style.display = 'flex';
+        }
+    }
+
+    // Update Sparks
+    for(let i = sparks.length-1; i >= 0; i--) {
+        const s = sparks[i];
+        s.position.addScaledVector(s.velocity, delta);
+        s.velocity.y -= 20 * delta; // Gravitasi spark
+        s.life -= 1;
+        if(s.life <= 0) {
+            scene.remove(s);
+            sparks.splice(i, 1);
+        }
+    }
+
+    renderer.render(scene, camera);
+}
+animate();
+
+// --- 5. SETUP UI & MENU ---
+function startGame() {
+    document.getElementById('menu').style.display = 'none';
+    document.getElementById('hud').style.display = 'flex';
+    p1 = new Fighter(0x00aaff, -3, true);
+    p2 = new Fighter(0xff3300, 3, false);
+}
+
+document.getElementById('btn-bot').onclick = () => {
+    gameMode = 'bot';
+    document.getElementById('p2-name').innerText = "AI Bot (Genichiro)";
+    startGame();
+};
+
+document.getElementById('btn-host').onclick = () => {
+    document.getElementById('btn-host').innerText = "Creating Room...";
+    peer = new Peer(); 
+    peer.on('open', id => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('join', id);
+        const linkDiv = document.getElementById('share-link');
+        linkDiv.style.display = 'block';
+        linkDiv.innerHTML = `Copy Link & Send to Friend:<br><a href="${url.href}" style="color:#fbc02d;">${url.href}</a><br><span style="font-size:0.9rem; color:#aaa; margin-top:10px; display:block;">Waiting for player...</span>`;
+    });
+    
+    peer.on('connection', connection => {
+        conn = connection;
+        setupConnection();
+        gameMode = 'online';
+        document.getElementById('p2-name').innerText = "Player 2 (Online)";
+        startGame();
+    });
+};
+
+// Client Joining URL
+const urlParams = new URLSearchParams(window.location.search);
+const joinId = urlParams.get('join');
+if (joinId) {
+    document.getElementById('menu').innerHTML = '<h2 style="color:white;">Connecting to Host...</h2>';
+    peer = new Peer();
+    peer.on('open', () => {
+        conn = peer.connect(joinId);
+        conn.on('open', () => {
+            setupConnection();
+            gameMode = 'online';
+            document.getElementById('p2-name').innerText = "Player 1 (Host)";
+            startGame();
+            // Client is P2, swap positions visually
+            p1.mesh.position.x = 3; 
+            p2.mesh.position.x = -3;
+        });
+    });
+}
+
+function setupConnection() {
+    conn.on('data', data => {
+        p2.mesh.position.set(data.x, p2.mesh.position.y, data.z);
+        p2.mesh.rotation.y = data.rotY;
+        p2.hp = data.hp;
+        p2.posture = data.posture;
+        p2.isBlocking = data.blocking;
+        p2.isStunned = data.stunned;
+        
+        if(data.attacking && !p2.isAttacking) p2.attack(data.attackType);
+    });
+}
+</script>
+</body>
+</html>
